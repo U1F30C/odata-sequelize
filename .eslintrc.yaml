@@ -6,3 +6,4 @@ env:
 rules:
   # XXX This rule should be enforced.
   no-param-reassign: off
+  no-use-before-define: off

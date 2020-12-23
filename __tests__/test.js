@@ -44,7 +44,10 @@ describe("#odataParser", () => {
   it("should parse orderby with multiple columns", () => {
     const result = parser("$orderby=name desc,ranking", sequelize);
     expect(result).toStrictEqual({
-      order: [["name", "DESC"], ["ranking", "ASC"]]
+      order: [
+        ["name", "DESC"],
+        ["ranking", "ASC"]
+      ]
     });
   });
 
@@ -149,6 +152,26 @@ describe("#odataParser", () => {
     });
   });
 
+  it("should parse filter substringof and tolower", () => {
+    const result = parser("$filter=substringof('prefix', tolower(foo))", sequelize);
+    expect(result).toEqual({
+      where: {
+        foo: {
+          attribute: {
+            args: [
+              {
+                col: "foo"
+              }
+            ],
+            fn: "lower"
+          },
+          comparator: sequelize.Sequelize.Op.like,
+          logic: "%prefix%"
+        }
+      }
+    });
+  });
+
   it("should parse filter substringof with and", () => {
     const result = parser("$filter=substringof('lorem', foo) and bar eq 'Test'", sequelize);
     expect(result).toStrictEqual({
@@ -191,7 +214,7 @@ describe("#odataParser", () => {
                 col: "foo"
               }
             ],
-            fn: "tolower"
+            fn: "lower"
           },
           comparator: sequelize.Sequelize.Op.eq,
           logic: "bar"
@@ -211,7 +234,7 @@ describe("#odataParser", () => {
                 col: "foo"
               }
             ],
-            fn: "toupper"
+            fn: "upper"
           },
           comparator: sequelize.Sequelize.Op.eq,
           logic: "bar"
@@ -231,7 +254,7 @@ describe("#odataParser", () => {
                 col: "foo"
               }
             ],
-            fn: "toupper"
+            fn: "upper"
           },
           comparator: sequelize.Sequelize.Op.ne,
           logic: "bar"

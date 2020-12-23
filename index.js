@@ -1,5 +1,20 @@
 const parser = require("odata-parser");
 
+const dbFunction = [
+  "tolower",
+  "toupper",
+  "trim",
+  "year",
+  "month",
+  "day",
+  "hour",
+  "minute",
+  "second"
+];
+
+const complexDbFunction = ["substringof", "startswith"];
+
+const allDbFunctions = dbFunction.concat(complexDbFunction);
 const objectOperators = [
   "and",
   "or",
@@ -30,26 +45,21 @@ const valueOperators = [
   "notIRegexp",
   "col"
 ];
-const customOperators = [
-  "ge",
-  "le",
-  "substringof",
-  "startswith",
-  "tolower",
-  "toupper",
-  "trim",
-  "year",
-  "month",
-  "day",
-  "hour",
-  "minute",
-  "second"
-];
+const customOperators = ["ge", "le"].concat(allDbFunctions);
 let mappedValueOperators = [];
 
 function mapOperators(sequelize) {
   mappedValueOperators = valueOperators.map(element => sequelize.Sequelize.Op[element]);
   sequelize.options.operatorsAliases = mappedValueOperators;
+}
+function getDbFunctionName(functionName) {
+  if (functionName == "tolower") {
+    return "lower";
+  }
+  if (functionName == "toupper") {
+    return "upper";
+  }
+  return functionName;
 }
 
 function getOperator(strOperator, sequelize) {
@@ -114,102 +124,57 @@ function transformTree(root, sequelize) {
   return root;
 }
 
+function addToTree(root, key, value) {
+  if (root instanceof Array) {
+    root.push({ [key]: value });
+  } else {
+    root[key] = value;
+  }
+}
+
 function parseFunction(obj, root, baseOperator, sequelize) {
-  if (obj.type !== "functioncall") throw new Error("Type is not a functioncall.");
   if (!Object.prototype.hasOwnProperty.call(obj, "func")) throw new Error("Function not found.");
   if (!Object.prototype.hasOwnProperty.call(obj, "args")) throw new Error("Args not found.");
   if (!sequelize.where) throw new Error("Sequelize where function not found.");
 
-  const dbFunction = [
-    "tolower",
-    "toupper",
-    "trim",
-    "year",
-    "month",
-    "day",
-    "hour",
-    "minute",
-    "second"
-  ];
   const { args } = obj;
-  const tmp = {};
   let value = "";
   const operator =
     obj.func === "substringof"
       ? getOperator(obj.func, sequelize)
       : baseOperator || getOperator(obj.func, sequelize);
-  const key = args.filter(t => Object.prototype.hasOwnProperty.call(t, "name"))[0].name;
-  const setValue = functionName => {
-    if (root instanceof Array) {
-      tmp[key] = sequelize.where(sequelize.fn(functionName, sequelize.col(key)), operator, value);
-    } else {
-      root[key] = sequelize.where(sequelize.fn(functionName, sequelize.col(key)), operator, value);
-    }
-  };
 
-  if (root instanceof Array && !dbFunction.includes(obj.func)) {
-    const tmpObj = {};
-    tmpObj[key] = {};
-    root.push(tmpObj);
-  } else if (root instanceof Array) {
-    root.push({});
-  } else {
-    root[key] = {};
-  }
+  let key = (args.find(t => t.type == "property") || {}).name;
 
-  switch (obj.func) {
-    case "substringof":
+  if (!dbFunction.includes(obj.func)) {
+    if (obj.func === "substringof") {
       value = `%${args[0].value}%`;
-      break;
-    case "startswith":
+    } else if (obj.func === "startswith") {
       value = `${args[0].value}%`;
-      break;
-    case "tolower":
-    case "toupper":
-    case "trim":
-    case "year":
-    case "month":
-    case "day":
-    case "hour":
-    case "minute":
-    case "second":
-      setValue(obj.func);
-      break;
-    default:
-      break;
-  }
-
-  if (root instanceof Array) {
-    if (!dbFunction.includes(obj.func)) {
-      //       tmp[key] = value;
-      root[root.length - 1][key][operator] = value;
-    } else {
-      root[root.length - 1] = tmp;
     }
-  } else if (!dbFunction.includes(obj.func)) {
-    root[key][operator] = value;
-  }
-}
+    if (key) {
+      addToTree(root, key, { [operator]: value });
+    } else {
+      let func = args.find(t => t.type == "functioncall");
+      key = (func.args.find(t => t.type == "property") || {}).name;
 
-function parseFunctionCall(obj, root, operator, sequelize) {
-  if (obj.type !== "functioncall") throw new Error("Type is not a functioncall.");
-
-  switch (obj.func) {
-    case "substringof":
-    case "startswith":
-    case "tolower":
-    case "toupper":
-    case "trim":
-    case "year":
-    case "month":
-    case "day":
-    case "hour":
-    case "minute":
-    case "second":
-      parseFunction(obj, root, operator, sequelize);
-      break;
-    default:
-      break;
+      addToTree(
+        root,
+        key,
+        sequelize.where(
+          sequelize.fn(getDbFunctionName(func.func), sequelize.col(key)),
+          operator,
+          value
+        )
+      );
+    }
+  } else {
+    const fn = sequelize.where(
+      sequelize.fn(getDbFunctionName(obj.func), sequelize.col(key)),
+      operator,
+      value
+    );
+    addToTree(root, key, fn);
   }
 }
 
@@ -219,50 +184,36 @@ function preOrderTraversal(root, baseObj, operator, sequelize) {
     operator = strOperator ? getOperator(strOperator, sequelize) : operator;
 
   if (root.type === "functioncall") {
-    parseFunctionCall(root, baseObj, operator, sequelize);
-  } else if (root.type === "property" || root.type === "literal") {
-    if (root.type === "property") {
-      baseObj.push({});
-      const { length } = baseObj;
-      baseObj[length - 1][root.name] = "";
+    if (allDbFunctions.includes(root.func)) parseFunction(root, baseObj, operator, sequelize);
+  } else if (root.type === "property") {
+    addToTree(baseObj, root.name, "");
+  } else if (root.type === "literal") {
+    const obj = baseObj[baseObj.length - 1];
+    const key = Object.keys(obj)[0];
+
+    if (Object.prototype.hasOwnProperty.call(obj[key], "logic")) {
+      obj[key].logic = root.value;
     } else {
-      const { length } = baseObj;
-      const key = Object.keys(baseObj[length - 1])[0];
-
-      if (Object.prototype.hasOwnProperty.call(baseObj[length - 1][key], "logic")) {
-        baseObj[length - 1][key].logic = root.value;
-      } else {
-        baseObj[length - 1][key] = root.value;
-      }
+      obj[key] = root.value;
     }
-  } else if (baseObj instanceof Array) {
-    baseObj.push({});
-
-    const { length } = baseObj;
-    baseObj[length - 1][operator] = [];
   } else {
-    baseObj[operator] = [];
+    addToTree(baseObj, operator, []);
   }
 
-  if (root.left) {
-    if (baseObj instanceof Array && baseObj.length > 0) {
-      const { length } = baseObj;
-      preOrderTraversal(root.left, baseObj[length - 1][operator], operator, sequelize);
-    } else {
-      preOrderTraversal(root.left, baseObj[operator], operator, sequelize);
-    }
-  }
-
-  if (root.right) {
-    if (baseObj instanceof Array && baseObj.length > 0) {
-      const { length } = baseObj;
-      preOrderTraversal(root.right, baseObj[length - 1][operator], operator, sequelize);
-    } else {
-      preOrderTraversal(root.right, baseObj[operator], operator, sequelize);
-    }
-  }
+  callPreOrderTraversal(root.left, baseObj, operator, sequelize);
+  callPreOrderTraversal(root.right, baseObj, operator, sequelize);
 
   return baseObj;
+}
+
+function callPreOrderTraversal(branch, baseObj, operator, sequelize) {
+  if (branch)
+    if (baseObj instanceof Array && baseObj.length > 0) {
+      const { length } = baseObj;
+      preOrderTraversal(branch, baseObj[length - 1][operator], operator, sequelize);
+    } else {
+      preOrderTraversal(branch, baseObj[operator], operator, sequelize);
+    }
 }
 
 /**
@@ -335,7 +286,7 @@ function parseFilter($filter, sequelize) {
   const tree = preOrderTraversal($filter, {}, null, sequelize);
   const parsed = transformTree(tree, sequelize);
 
-  return parsed !== {} ? { where: parsed } : {};
+  return { where: parsed };
 }
 
 /**
