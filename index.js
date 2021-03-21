@@ -144,7 +144,7 @@ function parseFunction(obj, root, baseOperator, sequelize) {
       ? getOperator(obj.func, sequelize)
       : baseOperator || getOperator(obj.func, sequelize);
 
-  let key = (args.find(t => t.type == "property") || {}).name;
+  let key = parseProperty((args.find(t => t.type == "property") || {}).name);
 
   if (!dbFunction.includes(obj.func)) {
     if (obj.func === "substringof") {
@@ -156,7 +156,7 @@ function parseFunction(obj, root, baseOperator, sequelize) {
       addToTree(root, key, { [operator]: value });
     } else {
       let func = args.find(t => t.type == "functioncall");
-      key = (func.args.find(t => t.type == "property") || {}).name;
+      key = parseProperty((func.args.find(t => t.type == "property") || {}).name);
 
       addToTree(
         root,
@@ -178,6 +178,16 @@ function parseFunction(obj, root, baseOperator, sequelize) {
   }
 }
 
+function parseProperty(property){
+  if (!property) {
+    return property;
+  }
+  if(property.match("/")) {
+    return `$${property.replace("/", ".")}$`
+  }
+  return property;
+}
+
 function preOrderTraversal(root, baseObj, operator, sequelize) {
   const strOperator = root.type === "functioncall" ? root.func : root.type;
   if (root.type !== "property" && root.type !== "literal" && root.type !== "functioncall")
@@ -186,7 +196,7 @@ function preOrderTraversal(root, baseObj, operator, sequelize) {
   if (root.type === "functioncall") {
     if (allDbFunctions.includes(root.func)) parseFunction(root, baseObj, operator, sequelize);
   } else if (root.type === "property") {
-    addToTree(baseObj, root.name, "");
+    addToTree(baseObj, parseProperty(root.name), "");
   } else if (root.type === "literal") {
     const obj = baseObj[baseObj.length - 1];
     const key = Object.keys(obj)[0];
