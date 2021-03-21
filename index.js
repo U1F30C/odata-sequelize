@@ -132,7 +132,7 @@ function addToTree(root, key, value) {
   }
 }
 
-function parseFunction(obj, root, baseOperator, sequelize) {
+function parseFunction(obj, root, baseOperator, sequelize, tableName) {
   if (!Object.prototype.hasOwnProperty.call(obj, "func")) throw new Error("Function not found.");
   if (!Object.prototype.hasOwnProperty.call(obj, "args")) throw new Error("Args not found.");
   if (!sequelize.where) throw new Error("Sequelize where function not found.");
@@ -144,7 +144,7 @@ function parseFunction(obj, root, baseOperator, sequelize) {
       ? getOperator(obj.func, sequelize)
       : baseOperator || getOperator(obj.func, sequelize);
 
-  let key = parseProperty((args.find(t => t.type == "property") || {}).name);
+  let key = parseProperty((args.find(t => t.type == "property") || {}).name, tableName);
 
   if (!dbFunction.includes(obj.func)) {
     if (obj.func === "substringof") {
@@ -156,7 +156,7 @@ function parseFunction(obj, root, baseOperator, sequelize) {
       addToTree(root, key, { [operator]: value });
     } else {
       let func = args.find(t => t.type == "functioncall");
-      key = parseProperty((func.args.find(t => t.type == "property") || {}).name);
+      key = parseProperty((func.args.find(t => t.type == "property") || {}).name, tableName, true);
 
       addToTree(
         root,
@@ -178,25 +178,26 @@ function parseFunction(obj, root, baseOperator, sequelize) {
   }
 }
 
-function parseProperty(property){
+function parseProperty(property, tableName, explicitTable = false) {
   if (!property) {
     return property;
   }
-  if(property.match("/")) {
-    return `$${property.replace("/", ".")}$`
+  if (property.match("/")) {
+    return `$${property.replace("/", ".")}$`;
   }
-  return property;
+  if (explicitTable && tableName) return `${tableName}.${property}`;
+  else return property;
 }
 
-function preOrderTraversal(root, baseObj, operator, sequelize) {
+function preOrderTraversal(root, baseObj, operator, sequelize, tableName) {
   const strOperator = root.type === "functioncall" ? root.func : root.type;
   if (root.type !== "property" && root.type !== "literal" && root.type !== "functioncall")
     operator = strOperator ? getOperator(strOperator, sequelize) : operator;
 
   if (root.type === "functioncall") {
-    if (allDbFunctions.includes(root.func)) parseFunction(root, baseObj, operator, sequelize);
+    if (allDbFunctions.includes(root.func)) parseFunction(root, baseObj, operator, sequelize, tableName);
   } else if (root.type === "property") {
-    addToTree(baseObj, parseProperty(root.name), "");
+    addToTree(baseObj, parseProperty(root.name), "", tableName);
   } else if (root.type === "literal") {
     const obj = baseObj[baseObj.length - 1];
     const key = Object.keys(obj)[0];
@@ -210,19 +211,19 @@ function preOrderTraversal(root, baseObj, operator, sequelize) {
     addToTree(baseObj, operator, []);
   }
 
-  callPreOrderTraversal(root.left, baseObj, operator, sequelize);
-  callPreOrderTraversal(root.right, baseObj, operator, sequelize);
+  callPreOrderTraversal(root.left, baseObj, operator, sequelize, tableName);
+  callPreOrderTraversal(root.right, baseObj, operator, sequelize, tableName);
 
   return baseObj;
 }
 
-function callPreOrderTraversal(branch, baseObj, operator, sequelize) {
+function callPreOrderTraversal(branch, baseObj, operator, sequelize, tableName) {
   if (branch)
     if (baseObj instanceof Array && baseObj.length > 0) {
       const { length } = baseObj;
-      preOrderTraversal(branch, baseObj[length - 1][operator], operator, sequelize);
+      preOrderTraversal(branch, baseObj[length - 1][operator], operator, sequelize, tableName);
     } else {
-      preOrderTraversal(branch, baseObj[operator], operator, sequelize);
+      preOrderTraversal(branch, baseObj[operator], operator, sequelize, tableName);
     }
 }
 
@@ -287,13 +288,13 @@ function parseSkip($skip) {
  * @param {string} $filter
  * @return {object} parsed object
  */
-function parseFilter($filter, sequelize) {
+function parseFilter($filter, sequelize, tableName) {
   if (!sequelize.Sequelize.Op) throw new Error("Sequelize operator not found.");
 
   if (!$filter) {
     return {};
   }
-  const tree = preOrderTraversal($filter, {}, null, sequelize);
+  const tree = preOrderTraversal($filter, {}, null, sequelize, tableName);
   const parsed = transformTree(tree, sequelize);
 
   return { where: parsed };
@@ -327,7 +328,7 @@ function parseOrderBy($orderby) {
  * @param {sequelize} Sequelize instance
  * @return {object} filled object to pass as query argument
  */
-module.exports = (string2Parse, sequelize) => {
+module.exports = (string2Parse, sequelize, tableName) => {
   if (!sequelize) throw new Error("Sequelize instance is required.");
   if (!sequelize.Sequelize.Op) throw new Error("Sequelize operator not found.");
 
@@ -338,7 +339,7 @@ module.exports = (string2Parse, sequelize) => {
   const top = parseTop(expression.$top);
   const skip = parseSkip(expression.$skip);
   const orderby = parseOrderBy(expression.$orderby);
-  const filter = parseFilter(expression.$filter, sequelize);
+  const filter = parseFilter(expression.$filter, sequelize, tableName);
 
   return Object.assign({}, attributes, top, skip, orderby, filter);
 };
